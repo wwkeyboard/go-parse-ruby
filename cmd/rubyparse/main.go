@@ -28,14 +28,15 @@ type Pos int
 type itemType int
 
 const (
-	itemError itemType = iota
-	itemText
-	itemEOF
-	itemSpace
-	itemIdentifier
-	itemClass
-	itemDef
-	itemEnd
+	itemError itemType = iota // 0
+	itemText                  // 1
+	itemEOF                   // 2
+	itemSpace                 // 3
+	itemIdentifier            // 4
+	itemClass                 // 5
+	itemDef                   // 6
+	itemEnd                   // 7
+	itemNewline               // 8
 )
 
 // not sure why this is a var an not a const
@@ -54,14 +55,14 @@ type stateFn func(*lexer) stateFn
 func lex(input string) *lexer {
 	l := &lexer{
 		input: input,
-		items: make(chan item),
+		items: make(chan item, 10),
 	}
 	go l.run()
 	return l
 }
 
 func (l *lexer) run() {
-	fmt.Printf("running - -")
+	fmt.Printf("running - -\n")
 	for l.state = lexText; l.state != nil; {
 		l.state = l.state(l)
 	}
@@ -70,6 +71,10 @@ func (l *lexer) run() {
 func (l *lexer) emit(t itemType) {
 	l.items <- item{t, l.start, l.input[l.start:l.pos]}
 	l.start = l.pos
+}
+
+func (l *lexer) close() {
+	close(l.items)
 }
 
 func (l *lexer) ignore() {
@@ -98,7 +103,11 @@ func (l *lexer) backup() {
 }
 
 func isAlphaNumeric(r rune) bool {
-	return r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r)
+	return r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+func isNewline(r rune) bool {
+	return r == '\n'
 }
 
 ////////////////////////////////////////
@@ -112,10 +121,13 @@ func lexText(l *lexer) stateFn {
 		return lexIdentifier
 	case strings.HasPrefix(l.input[l.pos:], lineComment):
 		return lexLineComment
+	case isNewline(r):
+		return lexNewline
 	}
 
 	// inform the channel we're done
 	l.emit(itemEOF)
+	l.close()
 	return nil
 }
 
@@ -132,6 +144,16 @@ func lexSpace(l *lexer) stateFn {
 		l.next()
 	}
 	l.emit(itemSpace)
+	return lexText
+}
+
+// takes a stateFn so we can eat the newline and stay in context
+func lexNewline(l *lexer) stateFn {
+	for isNewline(l.peek()) {
+			l.next()
+	}
+	l.emit(itemNewline)
+
 	return lexText
 }
 
@@ -168,10 +190,13 @@ func main() {
 	file := loadFile("test.rb")
 	lexer := lex(file)
 
-	for item := range lexer.items {
-		fmt.Printf("%v, %v\n", item.val, item.typ)
-	}
+//	go func() {
+		for item := range lexer.items {
+			fmt.Printf("%v, %v\n", item.val, item.typ)
+		}
+//	}()
 
+	fmt.Printf("fin")
 //	for _,token := range tokens {
 //		fmt.Printf("%T, \t %v\n", token, token)
 //	}
