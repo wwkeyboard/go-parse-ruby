@@ -1,5 +1,10 @@
 package main
 
+/*
+* TODOs:
+*  - Should pass the rune into the stateFn, to avoid all of the backups
+*/
+
 import (
 	"fmt"
 	"io/ioutil"
@@ -37,6 +42,10 @@ const (
 	itemDef                   // 6
 	itemEnd                   // 7
 	itemNewline               // 8
+	itemBareString            // 9
+	itemInterpolatedString    // 10
+	itemOpenParen             // 11
+	itemCloseParen            // 12
 )
 
 // not sure why this is a var an not a const
@@ -62,7 +71,6 @@ func lex(input string) *lexer {
 }
 
 func (l *lexer) run() {
-	fmt.Printf("running - -\n")
 	for l.state = lexText; l.state != nil; {
 		l.state = l.state(l)
 	}
@@ -102,12 +110,31 @@ func (l *lexer) backup() {
 	l.pos -= l.width
 }
 
+////////////////////////////////////////
+// type of rune conditions
 func isAlphaNumeric(r rune) bool {
 	return r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func isNewline(r rune) bool {
 	return r == '\n'
+}
+
+func isSpace(r rune) bool {
+	return r == ' ' || r == '\t'
+}
+
+// screw heredoc, I'll deal with that later
+func isStringDelim(r rune) bool {
+	return isSingleStringDelim(r) || isDoubleStringDelim(r)
+}
+
+func isSingleStringDelim(r rune) bool {
+	return r == '\''
+}
+
+func isDoubleStringDelim(r rune) bool {
+	return r == '"'
 }
 
 ////////////////////////////////////////
@@ -123,6 +150,15 @@ func lexText(l *lexer) stateFn {
 		return lexLineComment
 	case isNewline(r):
 		return lexNewline
+	case isStringDelim(r):
+		l.backup()
+		return lexString
+	case r == '(':
+		l.emit(itemOpenParen)
+		return lexText
+	case r == ')':
+		l.emit(itemCloseParen)
+		return lexText
 	}
 
 	// inform the channel we're done
@@ -143,7 +179,7 @@ func lexSpace(l *lexer) stateFn {
 	for isSpace(l.peek()) {
 		l.next()
 	}
-	l.emit(itemSpace)
+	// don't emit the space
 	return lexText
 }
 
@@ -179,8 +215,29 @@ Loop:
 	return lexText
 }
 
-func isSpace(r rune) bool {
-	return r == ' ' || r == '\t'
+func lexString(l *lexer) stateFn {
+	switch r := l.next(); {
+	case r == '\'':
+		return lexSingleQuoteString
+	}
+	return lexDoubleQuoteString
+}
+
+func lexSingleQuoteString(l *lexer) stateFn {
+	for !isSingleStringDelim(l.peek()) {
+		l.next()
+	}
+	l.emit(itemBareString)
+	return lexText
+}
+
+func lexDoubleQuoteString(l *lexer) stateFn {
+	for !isDoubleStringDelim(l.peek()) {
+		l.next()
+	}
+	l.next()
+	l.emit(itemInterpolatedString)
+	return lexText
 }
 
 ////////////////////////////////////////
@@ -190,16 +247,9 @@ func main() {
 	file := loadFile("test.rb")
 	lexer := lex(file)
 
-//	go func() {
-		for item := range lexer.items {
-			fmt.Printf("%v, %v\n", item.val, item.typ)
-		}
-//	}()
-
-	fmt.Printf("fin")
-//	for _,token := range tokens {
-//		fmt.Printf("%T, \t %v\n", token, token)
-//	}
+	for item := range lexer.items {
+		fmt.Printf("%v, %v\n", item.val, item.typ)
+	}
 }
 
 func loadFile(filename string) (string) {
